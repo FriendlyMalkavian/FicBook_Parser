@@ -359,9 +359,9 @@ class FicbookApp:
 
     def _add_context_menu(self, widget):
         menu = Menu(self.root, tearoff=0)
-        menu.add_command(label="Вырезать", command=lambda: self.root.focus_get().event_generate("<<Cut>>"))
-        menu.add_command(label="Копировать", command=lambda: self.root.focus_get().event_generate("<<Copy>>"))
-        menu.add_command(label="Вставить", command=lambda: self.root.focus_get().event_generate("<<Paste>>"))
+        menu.add_command(label="Вырезать", command=lambda: self._cut(widget))
+        menu.add_command(label="Копировать", command=lambda: self._copy(widget))
+        menu.add_command(label="Вставить", command=lambda: self._paste(widget))
         menu.add_separator()
         menu.add_command(label="Очистить", command=lambda: widget.delete(0, END))
 
@@ -371,6 +371,35 @@ class FicbookApp:
 
         widget.bind("<Button-3>", show_menu)
         widget.bind("<Button-2>", show_menu)
+        widget.bind("<Control-v>", lambda e: self._paste(widget))
+        widget.bind("<Control-V>", lambda e: self._paste(widget))
+
+    def _paste(self, widget):
+        try:
+            text = self.root.clipboard_get()
+        except Exception:
+            return
+        try:
+            widget.delete("sel.first", "sel.last")
+        except Exception:
+            pass
+        idx = widget.index(INSERT)
+        widget.insert(idx, text)
+
+    def _copy(self, widget):
+        try:
+            text = widget.selection_get()
+        except Exception:
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+
+    def _cut(self, widget):
+        self._copy(widget)
+        try:
+            widget.delete("sel.first", "sel.last")
+        except Exception:
+            pass
 
     def start_download(self):
         url = self.url_var.get().strip()
