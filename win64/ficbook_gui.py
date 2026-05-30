@@ -3,6 +3,7 @@ import json
 import re
 import sys
 import threading
+import time
 import uuid
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
@@ -138,6 +139,9 @@ def collect_fic(url_or_id: str, status_callback=None) -> FicData:
         for i, (href, part_title) in enumerate(part_links, 1):
             part_url = f"{BASE_URL}{href}" if href.startswith("/") else href
             _log(status_callback, f"  [{i}/{len(part_links)}] {part_title or href}")
+            if i > 1 and len(part_links) > 5:
+                _log(status_callback, "  Пауза 5 сек…")
+                time.sleep(5)
             p_title, text = fetch_part(part_url)
             data.parts.append({"title": p_title, "text": text})
 
