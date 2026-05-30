@@ -1,2 +1,4 @@
-*.txt
 *.zip
+*.txt
+!win64/README.txt
+!readme.md
