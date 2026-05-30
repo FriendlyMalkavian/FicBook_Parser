@@ -1,4 +1,6 @@
 *.zip
 *.txt
+*.epub
+*.fb2
 !win64/README.txt
 !readme.md
