@@ -1,6 +1,8 @@
 import argparse
+import json
 import re
 import sys
+from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
 import requests
@@ -72,11 +74,11 @@ def extract_metadata(soup: BeautifulSoup) -> dict:
     fandoms = []
     fandom_section = soup.find(string=re.compile("Фэндом"))
     if fandom_section:
-        parent = fandom_section.find_parent()
-        if parent:
+        parent_tag = fandom_section.find_parent()
+        if parent_tag:
             fandoms = [
                 a.get_text(strip=True)
-                for a in parent.find_all("a")
+                for a in parent_tag.find_all("a")
             ]
     meta["fandoms"] = fandoms
 
@@ -86,77 +88,140 @@ def extract_metadata(soup: BeautifulSoup) -> dict:
         tags = [a.get_text(strip=True) for a in tags_container.find_all("a")]
     meta["tags"] = tags
 
+    for key in ("size", "status", "rating"):
+        label = soup.find(string=re.compile(
+            {"size": "Размер", "status": "Статус", "rating": "Рейтинг"}[key],
+            re.IGNORECASE,
+        ))
+        if label:
+            parent_tag = label.find_parent()
+            if parent_tag:
+                text = parent_tag.get_text(" ", strip=True).replace(" ", " ")
+                meta[key] = text
+
     return meta
 
 
-def fetch_part(url: str) -> tuple[str, str, str]:
+def fetch_part(url: str) -> tuple[str, str]:
     soup = fetch_soup(url)
     title_tag = soup.find("h2", itemprop="headline")
     part_title = title_tag.get_text(strip=True) if title_tag else ""
     text = extract_part_text(soup)
-    prev_link = ""
-    next_link = ""
-
-    nav = soup.find("nav", class_="navigation-to-fanfic-parts-container")
-    if nav:
-        links = nav.find_all("a")
-        for link in links:
-            href = link.get("href", "")
-            if "btn-next" in link.get("class", []) or "Вперёд" in link.get_text():
-                next_link = href.split("#")[0]
-            elif "Назад" in link.get_text() and "/readfic/" in href:
-                prev_link = href.split("#")[0]
-    return part_title, text, next_link
+    return part_title, text
 
 
-def download_fic(url_or_id: str, output: str | None = None) -> str:
+@dataclass
+class FicData:
+    id: str
+    title: str = ""
+    author: str = ""
+    description: str = ""
+    fandoms: list[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
+    parts: list[dict] = field(default_factory=list)
+
+
+def collect_fic(url_or_id: str) -> FicData:
     fic_id = get_fic_id(url_or_id)
     main_url = f"{BASE_URL}/readfic/{fic_id}"
     print(f"[*] Загружаю страницу: {main_url}", file=sys.stderr)
 
     soup = fetch_soup(main_url)
     meta = extract_metadata(soup)
-    title = meta.get("title", f"Фанфик_{fic_id}")
-    author = meta.get("author", "Неизвестен")
-
-    safe_title = re.sub(r'[\\/:*?"<>|]', "_", title)
-    out_path = output or f"{safe_title}.txt"
+    data = FicData(id=fic_id, **{k: v for k, v in meta.items() if k in FicData.__dataclass_fields__})
 
     part_links = parse_part_links(soup)
 
-    with open(out_path, "w", encoding="utf-8") as f:
+    if not part_links:
+        print("[*] Фанфик без частей, загружаю текст с основной страницы", file=sys.stderr)
+        text = extract_part_text(soup)
+        if text:
+            data.parts.append({"title": "", "text": text})
+    else:
+        print(f"[*] Найдено частей: {len(part_links)}", file=sys.stderr)
+        for i, (href, part_title) in enumerate(part_links, 1):
+            part_url = f"{BASE_URL}{href}" if href.startswith("/") else href
+            print(f"  [{i}/{len(part_links)}] {part_title or href}", file=sys.stderr)
+            p_title, text = fetch_part(part_url)
+            data.parts.append({"title": p_title, "text": text})
+
+    return data
+
+
+def save_txt(data: FicData, path: str):
+    with open(path, "w", encoding="utf-8") as f:
         f.write(f"{'='*60}\n")
-        f.write(f"  {title}\n")
-        f.write(f"  Автор: {author}\n")
-        if meta.get("description"):
-            f.write(f"\n  Описание: {meta['description']}\n")
-        if meta.get("fandoms"):
-            f.write(f"  Фэндомы: {', '.join(meta['fandoms'])}\n")
-        if meta.get("tags"):
-            f.write(f"  Метки: {', '.join(meta['tags'])}\n")
+        f.write(f"  {data.title}\n")
+        f.write(f"  Автор: {data.author}\n")
+        if data.description:
+            f.write(f"\n  Описание: {data.description}\n")
+        if data.fandoms:
+            f.write(f"  Фэндомы: {', '.join(data.fandoms)}\n")
+        if data.tags:
+            f.write(f"  Метки: {', '.join(data.tags)}\n")
         f.write(f"{'='*60}\n\n")
 
-        if not part_links:
-            print("[*] Фанфик без частей, загружаю текст с основной страницы", file=sys.stderr)
-            text = extract_part_text(soup)
-            if text:
-                f.write(text)
-            else:
-                print("[!] Текст не найден на странице", file=sys.stderr)
-        else:
-            print(f"[*] Найдено частей: {len(part_links)}", file=sys.stderr)
-            for i, (href, part_title) in enumerate(part_links, 1):
-                part_url = f"{BASE_URL}{href}" if href.startswith("/") else href
-                print(f"  [{i}/{len(part_links)}] {part_title or href}", file=sys.stderr)
-                p_title, text, _ = fetch_part(part_url)
-                f.write(f"{'─'*40}\n")
-                f.write(f"  Часть {i}")
-                if p_title:
-                    f.write(f": {p_title}")
-                f.write(f"\n{'─'*40}\n\n")
-                if text:
-                    f.write(text)
-                f.write("\n\n")
+        for i, part in enumerate(data.parts, 1):
+            f.write(f"{'─'*40}\n")
+            f.write(f"  Часть {i}")
+            if part["title"]:
+                f.write(f": {part['title']}")
+            f.write(f"\n{'─'*40}\n\n")
+            if part["text"]:
+                f.write(part["text"])
+            f.write("\n\n")
+
+
+def save_md(data: FicData, path: str):
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(f"# {data.title}\n\n")
+        f.write(f"**Автор:** {data.author}\n\n")
+        if data.description:
+            f.write(f"{data.description}\n\n")
+        if data.fandoms:
+            f.write(f"**Фэндомы:** {', '.join(data.fandoms)}\n\n")
+        if data.tags:
+            f.write(f"**Метки:** {', '.join(data.tags)}\n\n")
+        f.write("---\n\n")
+
+        for i, part in enumerate(data.parts, 1):
+            title = part["title"] or f"Часть {i}"
+            f.write(f"## {title}\n\n")
+            if part["text"]:
+                f.write(part["text"])
+            f.write("\n\n---\n\n")
+
+
+def save_json(data: FicData, path: str):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(asdict(data), f, ensure_ascii=False, indent=2)
+
+
+FORMATTERS = {
+    "txt": save_txt,
+    "md": save_md,
+    "json": save_json,
+}
+
+
+def download_fic(url_or_id: str, output: str | None = None, fmt: str = "txt") -> str:
+    data = collect_fic(url_or_id)
+
+    safe_title = re.sub(r'[\\/:*?"<>|]', "_", data.title)
+    ext = fmt
+    if fmt == "md":
+        ext = "md"
+    elif fmt == "json":
+        ext = "json"
+    else:
+        ext = "txt"
+
+    out_path = output or f"{safe_title}.{ext}"
+
+    save = FORMATTERS.get(fmt)
+    if not save:
+        raise ValueError(f"Неизвестный формат: {fmt}")
+    save(data, out_path)
 
     print(f"\n[✓] Сохранено в: {out_path}", file=sys.stderr)
     return out_path
@@ -168,15 +233,21 @@ def main():
     )
     parser.add_argument(
         "url",
-        help="URL фанфика (например, https://ficbook.net/readfic/1081615) или числовой ID",
+        help="URL фанфика (например, https://ficbook.net/readfic/1081615) или ID",
     )
     parser.add_argument(
         "-o", "--output",
-        help="Путь для сохранения (по умолчанию: название_фанфика.txt)",
+        help="Путь для сохранения (по умолчанию: название_фанфика.формат)",
+    )
+    parser.add_argument(
+        "-f", "--format",
+        choices=["txt", "md", "json"],
+        default="txt",
+        help="Формат вывода: txt (по умолчанию), md (markdown), json",
     )
 
     args = parser.parse_args()
-    download_fic(args.url, args.output)
+    download_fic(args.url, args.output, args.format)
 
 
 if __name__ == "__main__":
