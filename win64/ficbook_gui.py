@@ -140,7 +140,7 @@ def collect_fic(url_or_id: str, status_callback=None) -> FicData:
             part_url = f"{BASE_URL}{href}" if href.startswith("/") else href
             _log(status_callback, f"  [{i}/{len(part_links)}] {part_title or href}")
             if i > 1 and len(part_links) > 5:
-                _log(status_callback, "  Пауза 5 сек…")
+                _log(status_callback, "Для фанфиков более 5 глав время загрузки может быть большим, наберитесь терпения. Если нет окна с ошибкой — значит я не сломался, а просто ещё не завершил загрузку")
                 time.sleep(5)
             p_title, text = fetch_part(part_url)
             data.parts.append({"title": p_title, "text": text})
