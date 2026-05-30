@@ -346,6 +346,8 @@ class FicbookApp:
         self.go_btn.grid(row=4, column=0, columnspan=5, pady=16)
         self.go_btn.configure(width=30)
 
+        self._add_context_menu(self.url_entry)
+
         self.status = StringVar()
         status_lbl = ttk.Label(main, textvariable=self.status, wraplength=520, foreground="#555")
         status_lbl.grid(row=5, column=0, columnspan=5, sticky=W, pady=(0, 4))
@@ -354,6 +356,21 @@ class FicbookApp:
         self.progress.grid(row=6, column=0, columnspan=5, sticky=EW)
 
         self.root.columnconfigure(0, weight=1)
+
+    def _add_context_menu(self, widget):
+        menu = Menu(self.root, tearoff=0)
+        menu.add_command(label="Вырезать", command=lambda: self.root.focus_get().event_generate("<<Cut>>"))
+        menu.add_command(label="Копировать", command=lambda: self.root.focus_get().event_generate("<<Copy>>"))
+        menu.add_command(label="Вставить", command=lambda: self.root.focus_get().event_generate("<<Paste>>"))
+        menu.add_separator()
+        menu.add_command(label="Очистить", command=lambda: widget.delete(0, END))
+
+        def show_menu(event):
+            menu.tk_popup(event.x_root, event.y_root)
+            menu.grab_release()
+
+        widget.bind("<Button-3>", show_menu)
+        widget.bind("<Button-2>", show_menu)
 
     def start_download(self):
         url = self.url_var.get().strip()
