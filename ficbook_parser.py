@@ -1,9 +1,11 @@
 import argparse
+import html
 import json
 import re
 import sys
+import uuid
 from dataclasses import dataclass, field, asdict
-from pathlib import Path
+from xml.etree import ElementTree as ET
 
 import requests
 from bs4 import BeautifulSoup
@@ -110,6 +112,16 @@ def fetch_part(url: str) -> tuple[str, str]:
     return part_title, text
 
 
+def clean_text(text: str) -> str:
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def text_to_paragraphs(text: str) -> list[str]:
+    return [p.strip() for p in clean_text(text).split("\n\n") if p.strip()]
+
+
 @dataclass
 class FicData:
     id: str
@@ -167,8 +179,7 @@ def save_txt(data: FicData, path: str):
             if part["title"]:
                 f.write(f": {part['title']}")
             f.write(f"\n{'─'*40}\n\n")
-            if part["text"]:
-                f.write(part["text"])
+            f.write(clean_text(part["text"]))
             f.write("\n\n")
 
 
@@ -187,8 +198,7 @@ def save_md(data: FicData, path: str):
         for i, part in enumerate(data.parts, 1):
             title = part["title"] or f"Часть {i}"
             f.write(f"## {title}\n\n")
-            if part["text"]:
-                f.write(part["text"])
+            f.write(clean_text(part["text"]))
             f.write("\n\n---\n\n")
 
 
@@ -197,10 +207,140 @@ def save_json(data: FicData, path: str):
         json.dump(asdict(data), f, ensure_ascii=False, indent=2)
 
 
+def save_epub(data: FicData, path: str):
+    from ebooklib import epub
+
+    book = epub.EpubBook()
+    book.set_identifier(str(uuid.uuid4()))
+    book.set_title(data.title)
+    book.set_language("ru")
+    book.add_author(data.author)
+
+    if data.description:
+        book.add_metadata("DC", "description", data.description)
+
+    css = """
+    @namespace epub "http://www.idpf.org/2007/ops";
+    body { font-family: serif; line-height: 1.6; margin: 1em 2em; }
+    h1, h2 { text-align: center; }
+    p { text-indent: 1.25em; margin: 0; }
+    .title-page { text-align: center; margin-top: 20%; }
+    .title-page h1 { font-size: 1.8em; }
+    .title-page .author { font-size: 1.2em; margin-top: 1em; }
+    .title-page .meta { font-size: 0.9em; color: #555; margin-top: 2em; }
+    """
+    css_item = epub.EpubItem(uid="style", file_name="style.css", media_type="text/css", content=css)
+    book.add_item(css_item)
+
+    chapters = []
+    for i, part in enumerate(data.parts, 1):
+        title = part["title"] or f"Часть {i}"
+        paragraphs = text_to_paragraphs(part["text"])
+        content = f"<h2>{html.escape(title)}</h2>\n"
+        for p in paragraphs:
+            content += f"<p>{html.escape(p)}</p>\n"
+
+        chap = epub.EpubHtml(title=title, file_name=f"part_{i}.xhtml", lang="ru")
+        chap.content = content
+        chap.add_item(css_item)
+        book.add_item(chap)
+        chapters.append(chap)
+
+    title_page_content = f"""
+    <div class="title-page">
+        <h1>{html.escape(data.title)}</h1>
+        <p class="author">{html.escape(data.author)}</p>
+    """
+    if data.description:
+        title_page_content += f'<p class="meta">{html.escape(data.description)}</p>'
+    if data.fandoms:
+        title_page_content += f'<p class="meta">Фэндомы: {html.escape(", ".join(data.fandoms))}</p>'
+    if data.tags:
+        title_page_content += f'<p class="meta">Метки: {html.escape(", ".join(data.tags))}</p>'
+    title_page_content += "</div>"
+
+    title_page = epub.EpubHtml(title="Начало", file_name="title.xhtml", lang="ru")
+    title_page.content = title_page_content
+    title_page.add_item(css_item)
+    book.add_item(title_page)
+
+    book.toc = [
+        epub.Link("title.xhtml", "Начало", "title"),
+    ] + [epub.Link(f"part_{i}.xhtml", p["title"] or f"Часть {i}", f"p{i}") for i, p in enumerate(data.parts, 1)]
+
+    book.add_item(epub.EpubNcx())
+    book.add_item(epub.EpubNav())
+    book.spine = ["nav"] + [title_page] + chapters
+
+    epub.write_epub(path, book, {})
+
+
+def save_fb2(data: FicData, path: str):
+    NS = "http://www.gribuser.ru/xml/fictionbook/2.0"
+    ET.register_namespace("", NS)
+    ET.register_namespace("xlink", "http://www.w3.org/1999/xlink")
+
+    root = ET.Element(f"{{{NS}}}FictionBook")
+
+    desc = ET.SubElement(root, f"{{{NS}}}description")
+    ti = ET.SubElement(desc, f"{{{NS}}}title-info")
+
+    _add_el(ti, NS, "genre", "fanfiction")
+    _add_el(ti, NS, "author", ET.SubElement(ti, f"{{{NS}}}first-name"))
+    last = ET.SubElement(ti, f"{{{NS}}}last-name")
+    last.text = data.author
+
+    _add_el(ti, NS, "book-title", data.title)
+
+    if data.description:
+        ann = ET.SubElement(ti, f"{{{NS}}}annotation")
+        ann_p = ET.SubElement(ann, f"{{{NS}}}p")
+        ann_p.text = data.description
+
+    _add_el(ti, NS, "lang", "ru")
+
+    for tag in data.tags:
+        _add_el(ti, NS, "keywords", tag)
+
+    doc_info = ET.SubElement(desc, f"{{{NS}}}document-info")
+    _add_el(doc_info, NS, "id", str(uuid.uuid4()))
+
+    body = ET.SubElement(root, f"{{{NS}}}body")
+
+    if data.title:
+        title_sec = ET.SubElement(body, f"{{{NS}}}section")
+        _add_el(title_sec, NS, "title", data.title)
+        if data.author:
+            ep = ET.SubElement(title_sec, f"{{{NS}}}epigraph")
+            ea = ET.SubElement(ep, f"{{{NS}}}author")
+            ea.text = data.author
+
+    for i, part in enumerate(data.parts, 1):
+        sec = ET.SubElement(body, f"{{{NS}}}section")
+        title = part["title"] or f"Часть {i}"
+        _add_el(sec, NS, "title", title)
+
+        paragraphs = text_to_paragraphs(part["text"])
+        for p_text in paragraphs:
+            _add_el(sec, NS, "p", p_text)
+
+    tree = ET.ElementTree(root)
+    tree.write(path, encoding="utf-8", xml_declaration=True)
+
+
+def _add_el(parent, ns, tag, text=None):
+    el = ET.SubElement(parent, f"{{{ns}}}{tag}")
+    if text is not None:
+        el.text = text
+    return el
+
+
 FORMATTERS = {
     "txt": save_txt,
     "md": save_md,
     "json": save_json,
+    "epub": save_epub,
+    "fb2": save_fb2,
 }
 
 
@@ -208,15 +348,7 @@ def download_fic(url_or_id: str, output: str | None = None, fmt: str = "txt") ->
     data = collect_fic(url_or_id)
 
     safe_title = re.sub(r'[\\/:*?"<>|]', "_", data.title)
-    ext = fmt
-    if fmt == "md":
-        ext = "md"
-    elif fmt == "json":
-        ext = "json"
-    else:
-        ext = "txt"
-
-    out_path = output or f"{safe_title}.{ext}"
+    out_path = output or f"{safe_title}.{fmt}"
 
     save = FORMATTERS.get(fmt)
     if not save:
@@ -241,9 +373,9 @@ def main():
     )
     parser.add_argument(
         "-f", "--format",
-        choices=["txt", "md", "json"],
+        choices=["txt", "md", "json", "epub", "fb2"],
         default="txt",
-        help="Формат вывода: txt (по умолчанию), md (markdown), json",
+        help="Формат вывода: txt (по умолчанию), md, json, epub, fb2",
     )
 
     args = parser.parse_args()

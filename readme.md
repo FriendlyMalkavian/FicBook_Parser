@@ -36,6 +36,12 @@ python ficbook_parser.py 1081615 -f md
 
 # В формате JSON
 python ficbook_parser.py 1081615 -f json
+
+# В формате EPUB (электронная книга)
+python ficbook_parser.py 1081615 -f epub
+
+# В формате FB2 (FictionBook)
+python ficbook_parser.py 1081615 -f fb2
 ```
 
 ### Аргументы
@@ -44,13 +50,15 @@ python ficbook_parser.py 1081615 -f json
 |----------|----------|
 | `url` | URL фанфика (например, `https://ficbook.net/readfic/1081615`) или числовой/UUID ID |
 | `-o, --output` | Путь для сохранения (по умолчанию: `название_фанфика.формат`) |
-| `-f, --format` | Формат вывода: `txt` (по умолчанию), `md` (markdown), `json` |
+| `-f, --format` | Формат вывода: `txt` (по умолчанию), `md`, `json`, `epub`, `fb2` |
 
 ### Форматы
 
 - **txt** — plain text с разделителями частей и метаданными
 - **md** — Markdown с заголовками и форматированием
 - **json** — структурированные данные (метаданные + список частей)
+- **epub** — электронная книга (EPUB 3, читается на всех устройствах)
+- **fb2** — FictionBook 2.0 (популярный формат для русскоязычных читалок)
 
 ## Описание
 
